@@ -63,7 +63,13 @@ struct ColumnMetaData {
     number_of_bins: usize,
 }
 
-fn save_metadata(final_file: String, metadata: Vec<ColumnMetaData>) {
+#[derive(Debug, Serialize, Deserialize)]
+struct GeneralMetaData {
+    number_of_rows: usize,
+    column_meta_data: Vec<ColumnMetaData>,
+}
+
+fn save_metadata(final_file: String, metadata: GeneralMetaData) {
     let mut metadata_file =
         File::create(final_file + "/meta.json").expect("failed to create metadata file");
 
@@ -77,7 +83,7 @@ fn save_metadata(final_file: String, metadata: Vec<ColumnMetaData>) {
 fn generate_metadata(original_file: String, final_file: String) {
     let original_column_metadata = parse_original_column_metadata(original_file.clone());
 
-    let mut new_metadata: Vec<ColumnMetaData> = Vec::new();
+    let mut new_column_metadata: Vec<ColumnMetaData> = Vec::new();
 
     for original_column in original_column_metadata {
         let new_metadata_column_spec: ColumnSpec;
@@ -95,7 +101,7 @@ fn generate_metadata(original_file: String, final_file: String) {
                 };
             }
         }
-        new_metadata.push(ColumnMetaData {
+        new_column_metadata.push(ColumnMetaData {
             name: original_column.name,
             description: original_column.description,
             spec: new_metadata_column_spec,
@@ -103,7 +109,77 @@ fn generate_metadata(original_file: String, final_file: String) {
         });
     }
 
-    save_metadata(final_file, new_metadata);
+    let mut number_of_rows: usize = 0;
+
+    let f = File::open(original_file).expect("failed to open file");
+    let reader = BufReader::new(f);
+
+    for line in reader.lines() {
+        let line_raw = line.unwrap();
+
+        if !line_raw.starts_with("#") {
+            let row = line_raw.split_ascii_whitespace();
+
+            number_of_rows += 1;
+
+            for (column_index, value_string) in row.enumerate() {
+                match new_column_metadata[column_index].spec {
+                    ColumnSpec::Long {
+                        min_value,
+                        max_value,
+                    } => {
+                        let value: i64 = value_string
+                            .parse()
+                            .expect("failed to parse string into i64");
+
+                        if max_value < value {
+                            new_column_metadata[column_index].spec = ColumnSpec::Long {
+                                min_value: min_value,
+                                max_value: value,
+                            }
+                        }
+
+                        if value < min_value {
+                            new_column_metadata[column_index].spec = ColumnSpec::Long {
+                                min_value: value,
+                                max_value: max_value,
+                            }
+                        }
+                    }
+                    ColumnSpec::Double {
+                        min_value,
+                        max_value,
+                    } => {
+                        let value: f64 = value_string
+                            .parse()
+                            .expect("failed to parse string into i64");
+
+                        if max_value < value {
+                            new_column_metadata[column_index].spec = ColumnSpec::Double {
+                                min_value: min_value,
+                                max_value: value,
+                            }
+                        }
+
+                        if value < min_value {
+                            new_column_metadata[column_index].spec = ColumnSpec::Double {
+                                min_value: value,
+                                max_value: max_value,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    save_metadata(
+        final_file,
+        GeneralMetaData {
+            number_of_rows: number_of_rows,
+            column_meta_data: new_column_metadata,
+        },
+    );
 }
 
 fn convert_dat_file(original_file: String) {
