@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::File,
-    io::{BufRead, BufReader},
+    fs::{self, File},
+    io::{BufRead, BufReader, Write},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,12 +45,58 @@ fn parse_original_column_metadata(file: String) -> Vec<OriginalColumnMetaData> {
     return original_column_metadata;
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum ColumnSpec {
+    #[serde(rename = "LONG")]
+    Long { min_value: i64, max_value: i64 },
+    #[serde(rename = "DOUBLE")]
+    Double { min_value: f64, max_value: f64 },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ColumnMetaData {
+    name: String,
+    description: String,
+    #[serde(flatten)]
+    spec: ColumnSpec,
+    bin_number: usize,
+}
+
+fn save_metadata(file: String, metadata: Vec<ColumnMetaData>) {
+    let mut metadata_file =
+        File::create(file + "/meta.json").expect("failed to create metadata file");
+
+    let metadata_json = serde_json::to_string(&metadata).expect("failed to parse metadata");
+
+    metadata_file
+        .write_all(metadata_json.as_bytes())
+        .expect("filed to write into metadata file");
+}
+
+fn convert_dat_file(file: String) {
+    let original_column_metadata = parse_original_column_metadata(file.clone());
+
+    let final_file_name = format!("{}.bolt", file); // bin optimized large tables
+
+    fs::create_dir_all(final_file_name.clone()).expect("failed to create directory for files");
+
+    let mut meta: Vec<ColumnMetaData> = Vec::new();
+
+    meta.push(ColumnMetaData {
+        name: "nammme".into(),
+        description: "opnes".into(),
+        spec: ColumnSpec::Long {
+            min_value: 12,
+            max_value: 22,
+        },
+        bin_number: 22,
+    });
+    save_metadata(final_file_name, meta);
+}
+
 fn main() {
     let input_file_name = "small-file.dat";
 
-    let original_column_metadata = parse_original_column_metadata(input_file_name.into());
-
-    for column in original_column_metadata {
-        println!("{:?}", column);
-    }
+    convert_dat_file(input_file_name.into());
 }
