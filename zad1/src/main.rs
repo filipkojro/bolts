@@ -49,9 +49,17 @@ fn parse_original_column_metadata(original_file: String) -> Vec<OriginalColumnMe
 #[serde(tag = "type")]
 enum ColumnSpec {
     #[serde(rename = "LONG")]
-    Long { min_value: i64, max_value: i64 },
+    Long {
+        min_value: i64,
+        max_value: i64,
+        bin_splits: Vec<i64>,
+    },
     #[serde(rename = "DOUBLE")]
-    Double { min_value: f64, max_value: f64 },
+    Double {
+        min_value: f64,
+        max_value: f64,
+        bin_splits: Vec<f64>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,8 +67,7 @@ struct ColumnMetaData {
     name: String,
     description: String,
     #[serde(flatten)]
-    spec: ColumnSpec,
-    number_of_bins: usize,
+    column_spec: ColumnSpec,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,20 +99,21 @@ fn generate_metadata(original_file: String, final_file: String) {
                 new_metadata_column_spec = ColumnSpec::Double {
                     min_value: f64::MAX,
                     max_value: f64::MIN,
+                    bin_splits: Vec::new(),
                 };
             }
             ColumnType::LONG => {
                 new_metadata_column_spec = ColumnSpec::Long {
                     min_value: i64::MAX,
                     max_value: i64::MIN,
+                    bin_splits: Vec::new(),
                 };
             }
         }
         new_column_metadata.push(ColumnMetaData {
             name: original_column.name,
             description: original_column.description,
-            spec: new_metadata_column_spec,
-            number_of_bins: 0,
+            column_spec: new_metadata_column_spec,
         });
     }
 
@@ -123,52 +131,61 @@ fn generate_metadata(original_file: String, final_file: String) {
             number_of_rows += 1;
 
             for (column_index, value_string) in row.enumerate() {
-                match new_column_metadata[column_index].spec {
+                match &mut new_column_metadata[column_index].column_spec {
                     ColumnSpec::Long {
                         min_value,
                         max_value,
+                        ..
                     } => {
                         let value: i64 = value_string
                             .parse()
                             .expect("failed to parse string into i64");
 
-                        if max_value < value {
-                            new_column_metadata[column_index].spec = ColumnSpec::Long {
-                                min_value: min_value,
-                                max_value: value,
-                            }
+                        if *max_value < value {
+                            *max_value = value;
                         }
 
-                        if value < min_value {
-                            new_column_metadata[column_index].spec = ColumnSpec::Long {
-                                min_value: value,
-                                max_value: max_value,
-                            }
+                        if value < *min_value {
+                            *min_value = value;
                         }
                     }
                     ColumnSpec::Double {
                         min_value,
                         max_value,
+                        ..
                     } => {
                         let value: f64 = value_string
                             .parse()
                             .expect("failed to parse string into i64");
 
-                        if max_value < value {
-                            new_column_metadata[column_index].spec = ColumnSpec::Double {
-                                min_value: min_value,
-                                max_value: value,
-                            }
+                        if *max_value < value {
+                            *max_value = value;
                         }
 
-                        if value < min_value {
-                            new_column_metadata[column_index].spec = ColumnSpec::Double {
-                                min_value: value,
-                                max_value: max_value,
-                            }
+                        if value < *min_value {
+                            *min_value = value;
                         }
                     }
                 }
+            }
+        }
+    }
+
+    for column_metadata in new_column_metadata.iter_mut() {
+        match &mut column_metadata.column_spec {
+            ColumnSpec::Long {
+                min_value,
+                max_value,
+                bin_splits,
+            } => {
+                *bin_splits = vec![*min_value, *max_value];
+            }
+            ColumnSpec::Double {
+                min_value,
+                max_value,
+                bin_splits,
+            } => {
+                *bin_splits = vec![*min_value, *max_value];
             }
         }
     }
