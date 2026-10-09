@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File},
-    io::{BufRead, BufReader, Write},
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,6 +85,20 @@ fn save_metadata(final_file: String, metadata: GeneralMetaData) {
     metadata_file
         .write_all(metadata_json.as_bytes())
         .expect("filed to write into metadata file");
+}
+
+fn get_metadata(final_file: String) -> GeneralMetaData {
+    let mut file = File::open(final_file + "/meta.json").expect("failed to open metadata file");
+
+    let mut metadata_json = String::new();
+
+    file.read_to_string(&mut metadata_json)
+        .expect("failed to read metadata file");
+
+    let general_metadata: GeneralMetaData =
+        serde_json::from_str(&metadata_json).expect("failed to parse metadata contents");
+
+    return general_metadata;
 }
 
 fn generate_metadata(original_file: String, final_file: String) {
@@ -199,12 +213,74 @@ fn generate_metadata(original_file: String, final_file: String) {
     );
 }
 
+fn convert_data(original_file: String, final_file: String) {
+    let metadata = get_metadata(final_file.clone());
+
+    let f = File::open(original_file).expect("failed to open file");
+    let reader = BufReader::new(f);
+
+    let table_rows_per_flush: usize = 1000000 / metadata.column_meta_data.len() / 8;
+
+    let mut bin_table_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(final_file + "/table.bin")
+        .expect("failed to open table.bin");
+
+    let table_buffer_size = table_rows_per_flush * metadata.column_meta_data.len() * 8;
+    let mut table_buffer: Vec<u8> = Vec::with_capacity(table_buffer_size);
+
+    for line in reader.lines() {
+        let line_raw = line.unwrap();
+
+        if !line_raw.starts_with("#") {
+            let row = line_raw.split_ascii_whitespace();
+
+            for (column_index, value_string) in row.enumerate() {
+                match &metadata.column_meta_data[column_index].column_spec {
+                    ColumnSpec::Long { bin_splits, .. } => {
+                        let value: i64 = value_string
+                            .parse()
+                            .expect("failed to parse string into i64");
+                        let value_bytes = value.to_le_bytes();
+                        table_buffer.extend_from_slice(&value_bytes);
+                    }
+                    ColumnSpec::Double { bin_splits, .. } => {
+                        let value: f64 = value_string
+                            .parse()
+                            .expect("failed to parse string into i64");
+                        let value_bytes = value.to_le_bytes();
+                        table_buffer.extend_from_slice(&value_bytes);
+                    }
+                }
+            }
+
+            if table_buffer.len() == table_buffer_size {
+                bin_table_file
+                    .write_all(table_buffer.as_slice())
+                    .expect("failed to write table.bin");
+
+                table_buffer.clear();
+            }
+        }
+    }
+    if table_buffer.len() > 0 {
+        bin_table_file
+            .write_all(table_buffer.as_slice())
+            .expect("failed to write table.bin");
+
+        table_buffer.clear();
+    }
+}
+
 fn convert_dat_file(original_file: String) {
     let final_file_name = format!("{}.bolt", original_file); // bin optimized large tables
 
     fs::create_dir_all(final_file_name.clone()).expect("failed to create directory for files");
 
-    generate_metadata(original_file, final_file_name);
+    generate_metadata(original_file.clone(), final_file_name.clone());
+
+    convert_data(original_file, final_file_name);
 }
 
 fn main() {
