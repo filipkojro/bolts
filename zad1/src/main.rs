@@ -1,22 +1,15 @@
-use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, Read, Write},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
-enum ColumnType {
-    LONG,
-    DOUBLE,
-}
+mod models;
+mod reader;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct OriginalColumnMetaData {
-    name: String,
-    description: String,
-    #[serde(rename = "type")]
-    column_type: ColumnType,
-}
+use crate::{
+    models::{ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData},
+    reader::read_table_bin_row,
+};
 
 fn parse_original_column_metadata(original_file: String) -> Vec<OriginalColumnMetaData> {
     let f = File::open(original_file).expect("failed to open file");
@@ -43,37 +36,6 @@ fn parse_original_column_metadata(original_file: String) -> Vec<OriginalColumnMe
         serde_json::from_str(&original_column_metadata_raw)
             .expect("failed to parse original column metadata");
     return original_column_metadata;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum ColumnSpec {
-    #[serde(rename = "LONG")]
-    Long {
-        min_value: i64,
-        max_value: i64,
-        bin_splits: Vec<i64>,
-    },
-    #[serde(rename = "DOUBLE")]
-    Double {
-        min_value: f64,
-        max_value: f64,
-        bin_splits: Vec<f64>,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ColumnMetaData {
-    name: String,
-    description: String,
-    #[serde(flatten)]
-    column_spec: ColumnSpec,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeneralMetaData {
-    number_of_rows: usize,
-    column_meta_data: Vec<ColumnMetaData>,
 }
 
 fn save_metadata(final_file: String, metadata: GeneralMetaData) {
@@ -274,7 +236,7 @@ fn convert_data(original_file: String, final_file: String) {
 }
 
 fn convert_dat_file(original_file: String) {
-    let final_file_name = format!("{}.bolt", original_file); // bin optimized large tables
+    let final_file_name = format!("{original_file}.bolt"); // bin optimized large tables
 
     fs::create_dir_all(final_file_name.clone()).expect("failed to create directory for files");
 
@@ -284,7 +246,12 @@ fn convert_dat_file(original_file: String) {
 }
 
 fn main() {
-    let input_file_name = "small-file.dat";
+    let input_file_name = String::from("small-file.dat");
 
-    convert_dat_file(input_file_name.into());
+    convert_dat_file(input_file_name.clone());
+
+    let final_file_name: String = format!("{input_file_name}.bolt");
+    let metadata = get_metadata(final_file_name.clone());
+    let row = read_table_bin_row(final_file_name, metadata, 1);
+    println!("row: {row}");
 }
