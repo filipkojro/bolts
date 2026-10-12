@@ -348,7 +348,8 @@ pub fn convert_dat_file(original_file: String) {
 }
 
 use jni::{
-    Env,
+    Env, EnvUnowned,
+    errors::{Result, ThrowRuntimeExAndDefault},
     objects::{JClass, JString},
     sys::jint,
 };
@@ -359,17 +360,16 @@ pub extern "system" fn Java_app_Main_add(_env: &mut Env, _class: JClass, a: jint
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_app_Main_convertToBolt(
-    env: &mut Env,
-    _class: JClass,
-    filename: JString,
+pub extern "system" fn Java_app_Main_convertToBolt<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    filename: JString<'caller>,
 ) {
-    let filename_string: String = filename
-        .mutf8_chars(env)
-        .expect("couldn't get chars")
-        .to_string();
-
-    println!("FILENAME: {}", filename_string);
-
-    convert_dat_file(filename_string);
+    unowned_env
+        .with_env(|env| -> Result<()> {
+            let filename_string = filename.try_to_string(env)?;
+            convert_dat_file(filename_string);
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
 }
