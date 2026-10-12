@@ -6,8 +6,6 @@ use std::{
 mod models;
 mod reader;
 
-use serde::de::IntoDeserializer;
-
 use crate::{
     models::{
         BinFiles, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData,
@@ -53,7 +51,7 @@ fn save_metadata(final_file: String, metadata: GeneralMetaData) {
         .expect("filed to write into metadata file");
 }
 
-fn get_metadata(final_file: String) -> GeneralMetaData {
+pub fn get_metadata(final_file: String) -> GeneralMetaData {
     let mut file = File::open(final_file + "/meta.json").expect("failed to open metadata file");
 
     let mut metadata_json = String::new();
@@ -339,7 +337,7 @@ fn convert_data(original_file: String, final_file: String) {
     }
 }
 
-fn convert_dat_file(original_file: String) {
+pub fn convert_dat_file(original_file: String) {
     let final_file_name = format!("{original_file}.bolt"); // bin optimized large tables
 
     fs::create_dir_all(final_file_name.clone()).expect("failed to create directory for files");
@@ -349,13 +347,29 @@ fn convert_dat_file(original_file: String) {
     convert_data(original_file, final_file_name);
 }
 
-fn main() {
-    let input_file_name = String::from("small-file.dat");
+use jni::{
+    Env,
+    objects::{JClass, JString},
+    sys::jint,
+};
 
-    convert_dat_file(input_file_name.clone());
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_Main_add(_env: &mut Env, _class: JClass, a: jint, b: jint) -> jint {
+    return a + b;
+}
 
-    let final_file_name: String = format!("{input_file_name}.bolt");
-    let metadata = get_metadata(final_file_name.clone());
-    let row = read_table_bin_row(final_file_name, metadata, 1);
-    println!("row: {row}");
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_Main_convertToBolt(
+    env: &mut Env,
+    _class: JClass,
+    filename: JString,
+) {
+    let filename_string: String = filename
+        .mutf8_chars(env)
+        .expect("couldn't get chars")
+        .to_string();
+
+    println!("FILENAME: {}", filename_string);
+
+    convert_dat_file(filename_string);
 }
