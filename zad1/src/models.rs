@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fs::File;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ColumnType {
@@ -43,4 +44,9 @@ pub struct ColumnMetaData {
 pub struct GeneralMetaData {
     pub number_of_rows: usize,
     pub column_meta_data: Vec<ColumnMetaData>,
+}
+
+pub struct BinFiles {
+    pub column: File,
+    pub indexes: File,
 }

@@ -6,8 +6,12 @@ use std::{
 mod models;
 mod reader;
 
+use serde::de::IntoDeserializer;
+
 use crate::{
-    models::{ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData},
+    models::{
+        BinFiles, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData,
+    },
     reader::read_table_bin_row,
 };
 
@@ -151,17 +155,17 @@ fn generate_metadata(original_file: String, final_file: String) {
         match &mut column_metadata.column_spec {
             ColumnSpec::Long {
                 min_value,
-                max_value,
                 bin_splits,
+                ..
             } => {
-                *bin_splits = vec![*min_value, *max_value];
+                *bin_splits = vec![*min_value];
             }
             ColumnSpec::Double {
                 min_value,
-                max_value,
                 bin_splits,
+                ..
             } => {
-                *bin_splits = vec![*min_value, *max_value];
+                *bin_splits = vec![*min_value];
             }
         }
     }
@@ -175,6 +179,71 @@ fn generate_metadata(original_file: String, final_file: String) {
     );
 }
 
+fn create_column_bins<T>(
+    final_file: &String,
+    column_metadata: &ColumnMetaData,
+    bins: &Vec<T>,
+) -> Vec<BinFiles> {
+    fs::create_dir_all(format!("{}/{}", final_file.clone(), column_metadata.name))
+        .expect("failed to create directory for column");
+
+    let mut column_bins: Vec<BinFiles> = Vec::new();
+
+    for i in 0..bins.len() {
+        let bin_files: BinFiles = BinFiles {
+            column: OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(format!("{}/{}/{}.bin", final_file, column_metadata.name, i))
+                .expect("failed to create column bin file"),
+            indexes: OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(format!("{}/{}/{}.idx", final_file, column_metadata.name, i))
+                .expect("failed to create column idx file"),
+        };
+
+        column_bins.push(bin_files);
+    }
+
+    return column_bins;
+}
+
+fn put_into_bin_i64(index: u64, value: i64, bin_splits: &Vec<i64>, bin_files: &mut Vec<BinFiles>) {
+    let bin_index = bin_splits
+        .partition_point(|&x| x <= value)
+        .saturating_sub(1);
+
+    let value_bytes = value.to_le_bytes();
+    bin_files[bin_index]
+        .column
+        .write(&value_bytes)
+        .expect("failed to write to column");
+
+    let index_bytes = index.to_le_bytes();
+    bin_files[bin_index]
+        .indexes
+        .write(&index_bytes)
+        .expect("failed to write to column");
+}
+fn put_into_bin_f64(index: u64, value: f64, bin_splits: &Vec<f64>, bin_files: &mut Vec<BinFiles>) {
+    let bin_index = bin_splits
+        .partition_point(|&x| x <= value)
+        .saturating_sub(1);
+
+    let value_bytes = value.to_le_bytes();
+    bin_files[bin_index]
+        .column
+        .write(&value_bytes)
+        .expect("failed to write to column");
+
+    let index_bytes = index.to_le_bytes();
+    bin_files[bin_index]
+        .indexes
+        .write(&index_bytes)
+        .expect("failed to write to column");
+}
+
 fn convert_data(original_file: String, final_file: String) {
     let metadata = get_metadata(final_file.clone());
 
@@ -186,13 +255,34 @@ fn convert_data(original_file: String, final_file: String) {
     let mut bin_table_file = OpenOptions::new()
         .create(true)
         .write(true)
-        .open(final_file + "/table.bin")
+        .open(final_file.clone() + "/table.bin")
         .expect("failed to open table.bin");
+
+    let mut binned_column_files: Vec<Vec<BinFiles>> = Vec::new();
+
+    for column_metadata in metadata.column_meta_data.iter() {
+        match &column_metadata.column_spec {
+            ColumnSpec::Long { bin_splits, .. } => {
+                binned_column_files.push(create_column_bins(
+                    &final_file,
+                    &column_metadata,
+                    &bin_splits,
+                ));
+            }
+            ColumnSpec::Double { bin_splits, .. } => {
+                binned_column_files.push(create_column_bins(
+                    &final_file,
+                    &column_metadata,
+                    &bin_splits,
+                ));
+            }
+        }
+    }
 
     let table_buffer_size = table_rows_per_flush * metadata.column_meta_data.len() * 8;
     let mut table_buffer: Vec<u8> = Vec::with_capacity(table_buffer_size);
 
-    for line in reader.lines() {
+    for (index, line) in reader.lines().enumerate() {
         let line_raw = line.unwrap();
 
         if !line_raw.starts_with("#") {
@@ -206,6 +296,13 @@ fn convert_data(original_file: String, final_file: String) {
                             .expect("failed to parse string into i64");
                         let value_bytes = value.to_le_bytes();
                         table_buffer.extend_from_slice(&value_bytes);
+
+                        put_into_bin_i64(
+                            index as u64,
+                            value,
+                            bin_splits,
+                            &mut binned_column_files[column_index],
+                        );
                     }
                     ColumnSpec::Double { bin_splits, .. } => {
                         let value: f64 = value_string
@@ -213,6 +310,13 @@ fn convert_data(original_file: String, final_file: String) {
                             .expect("failed to parse string into i64");
                         let value_bytes = value.to_le_bytes();
                         table_buffer.extend_from_slice(&value_bytes);
+
+                        put_into_bin_f64(
+                            index as u64,
+                            value,
+                            bin_splits,
+                            &mut binned_column_files[column_index],
+                        );
                     }
                 }
             }
