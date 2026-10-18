@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use zad1::{bin_file_path, get_metadata, idx_file_path};
+use bolts::{bin_file_path, get_metadata, idx_file_path};
 
 fn count_equal() -> usize {
     let mut f = BufReader::new(

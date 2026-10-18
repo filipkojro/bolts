@@ -1,7 +1,0 @@
-/target
-*.bolt
-
-*.class
-*.jar
-*.war
-*.ear

@@ -2,7 +2,7 @@ package app;
 
 public class Main {
     static {
-        System.loadLibrary("zad1");
+        System.loadLibrary("bolts");
     }
 
     public static native int add(int a, int b);

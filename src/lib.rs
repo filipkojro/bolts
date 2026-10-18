@@ -342,7 +342,7 @@ fn convert_data(original_file: String, final_file: String) {
 }
 
 pub fn convert_dat_file(original_file: String) {
-    let final_file_name = format!("{original_file}.bolt"); // bin optimized large tables
+    let final_file_name = format!("{original_file}.bolts"); // bin organized large table storage
 
     fs::create_dir_all(final_file_name.clone()).expect("failed to create directory for files");
 
