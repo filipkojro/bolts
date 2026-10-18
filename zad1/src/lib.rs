@@ -6,11 +6,8 @@ use std::{
 mod models;
 mod reader;
 
-use crate::{
-    models::{
-        BinFiles, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData,
-    },
-    reader::read_table_bin_row,
+use crate::models::{
+    BinFiles, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData,
 };
 
 fn parse_original_column_metadata(original_file: String) -> Vec<OriginalColumnMetaData> {
@@ -177,6 +174,13 @@ fn generate_metadata(original_file: String, final_file: String) {
     );
 }
 
+pub fn bin_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
+    return format!("{}/{}/{}.bin", file_name, column_name, bin_number);
+}
+pub fn idx_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
+    return format!("{}/{}/{}.idx", file_name, column_name, bin_number);
+}
+
 fn create_column_bins<T>(
     final_file: &String,
     column_metadata: &ColumnMetaData,
@@ -192,12 +196,12 @@ fn create_column_bins<T>(
             column: OpenOptions::new()
                 .create(true)
                 .write(true)
-                .open(format!("{}/{}/{}.bin", final_file, column_metadata.name, i))
+                .open(bin_file_path(final_file, &column_metadata.name, i))
                 .expect("failed to create column bin file"),
             indexes: OpenOptions::new()
                 .create(true)
                 .write(true)
-                .open(format!("{}/{}/{}.idx", final_file, column_metadata.name, i))
+                .open(idx_file_path(final_file, &column_metadata.name, i))
                 .expect("failed to create column idx file"),
         };
 
@@ -345,6 +349,43 @@ pub fn convert_dat_file(original_file: String) {
     generate_metadata(original_file.clone(), final_file_name.clone());
 
     convert_data(original_file, final_file_name);
+}
+
+pub fn find_column_equals<T>(file_name: String, column_name: String, value: T)
+where
+    T: PartialOrd<i64>,
+    T: PartialOrd<f64>,
+{
+    let metadata = get_metadata(file_name.clone());
+
+    for column_metadata in metadata.column_meta_data {
+        if column_metadata.name == column_name {
+            match column_metadata.column_spec {
+                ColumnSpec::Long {
+                    min_value,
+                    max_value,
+                    bin_splits,
+                } => {
+                    if value < min_value || value > max_value {
+                        return;
+                    }
+                    let bin_index = bin_splits
+                        .partition_point(|&x| value >= x)
+                        .saturating_sub(1);
+
+                    let bin_reader = BufReader::new(
+                        File::open(bin_file_path(&file_name.clone(), &column_name, bin_index))
+                            .expect("failed to open file"),
+                    );
+                }
+                ColumnSpec::Double {
+                    min_value,
+                    max_value,
+                    bin_splits,
+                } => todo!(),
+            }
+        }
+    }
 }
 
 use jni::{
