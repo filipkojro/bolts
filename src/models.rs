@@ -15,7 +15,7 @@ pub struct OriginalColumnMetaData {
     pub column_type: ColumnType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ColumnSpec {
     #[serde(rename = "LONG")]
@@ -32,7 +32,7 @@ pub enum ColumnSpec {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnMetaData {
     pub name: String,
     pub description: String,
@@ -40,7 +40,7 @@ pub struct ColumnMetaData {
     pub column_spec: ColumnSpec,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralMetaData {
     pub number_of_rows: usize,
     pub column_meta_data: Vec<ColumnMetaData>,

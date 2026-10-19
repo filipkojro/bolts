@@ -237,6 +237,7 @@ fn convert_data(original_file: String, final_file: String) {
     let mut bin_table_file = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(final_file.clone() + "/table.bin")
         .expect("failed to open table.bin");
 
@@ -264,7 +265,9 @@ fn convert_data(original_file: String, final_file: String) {
     let table_buffer_size = table_rows_per_flush * metadata.column_meta_data.len() * 8;
     let mut table_buffer: Vec<u8> = Vec::with_capacity(table_buffer_size);
 
-    for (index, line) in reader.lines().enumerate() {
+    let mut row_index: u64 = 0;
+
+    for line in reader.lines() {
         let line_raw = line.unwrap();
 
         if !line_raw.starts_with("#") {
@@ -280,7 +283,7 @@ fn convert_data(original_file: String, final_file: String) {
                         table_buffer.extend_from_slice(&value_bytes);
 
                         put_into_bin_i64(
-                            index as u64,
+                            row_index as u64,
                             value,
                             bin_splits,
                             &mut binned_column_files[column_index],
@@ -294,7 +297,7 @@ fn convert_data(original_file: String, final_file: String) {
                         table_buffer.extend_from_slice(&value_bytes);
 
                         put_into_bin_f64(
-                            index as u64,
+                            row_index as u64,
                             value,
                             bin_splits,
                             &mut binned_column_files[column_index],
@@ -303,7 +306,9 @@ fn convert_data(original_file: String, final_file: String) {
                 }
             }
 
-            if table_buffer.len() == table_buffer_size {
+            row_index += 1;
+
+            if table_buffer.len() >= table_buffer_size {
                 bin_table_file
                     .write_all(table_buffer.as_slice())
                     .expect("failed to write table.bin");

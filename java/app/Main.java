@@ -12,6 +12,6 @@ public class Main {
         int result = add(15, 27);
         System.out.println("Result from Rust: " + result);
 
-        convertToBolt("small-file.dat");
+        convertToBolt("large-file.dat");
     }
 }
