@@ -4,7 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bolts::{bin_file_path, get_metadata, idx_file_path};
+use bolts::{
+    models::{bin_file_path, idx_file_path},
+    reader::get_metadata,
+};
 
 fn count_equal() -> usize {
     let mut f = BufReader::new(

@@ -50,3 +50,10 @@ pub struct BinFiles {
     pub column: File,
     pub indexes: File,
 }
+
+pub fn bin_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
+    return format!("{}/{}/{}.bin", file_name, column_name, bin_number);
+}
+pub fn idx_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
+    return format!("{}/{}/{}.idx", file_name, column_name, bin_number);
+}
