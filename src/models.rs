@@ -42,7 +42,7 @@ pub struct ColumnMetaData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralMetaData {
-    pub number_of_rows: usize,
+    pub number_of_rows: u64,
     pub column_meta_data: Vec<ColumnMetaData>,
 }
 

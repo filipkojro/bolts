@@ -79,7 +79,7 @@ fn generate_metadata(original_file: String, final_file: String) {
         });
     }
 
-    let mut number_of_rows: usize = 0;
+    let mut number_of_rows: u64 = 0;
 
     let f = File::open(original_file).expect("failed to open file");
     let reader = BufReader::new(f);
