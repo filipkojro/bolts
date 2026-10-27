@@ -25,7 +25,7 @@ pub extern "system" fn Java_app_Main_convertToBolt<'caller>(
     unowned_env
         .with_env(|env| -> Result<()> {
             let filename_string = filename.try_to_string(env)?;
-            convert_dat_file(filename_string);
+            convert_dat_file(filename_string).expect("failed to convert file");
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>();

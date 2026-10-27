@@ -9,17 +9,21 @@ fn main() {
         "large-file.dat.bolts".to_string(),
         "c4".to_string(),
         RowValue::Long { value: 14 },
-    );
-    println!("read: {:?}", read[0]);
+    )
+    .unwrap();
+    println!("read: {}", read.len());
 
     let start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        std::hint::black_box(column_eq(
-            "large-file.dat.bolts".to_string(),
-            "c4".to_string(),
-            RowValue::Long { value: 14 },
-        ));
+        std::hint::black_box(
+            column_eq(
+                "large-file.dat.bolts".to_string(),
+                "c4".to_string(),
+                RowValue::Long { value: 14 },
+            )
+            .unwrap(),
+        );
     }
 
     let total_duration: Duration = start.elapsed();
