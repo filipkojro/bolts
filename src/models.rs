@@ -57,3 +57,14 @@ pub fn bin_file_path(file_name: &String, column_name: &String, bin_number: usize
 pub fn idx_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
     return format!("{}/{}/{}.idx", file_name, column_name, bin_number);
 }
+pub fn table_file_path(file_name: &String) -> String {
+    return format!("{}/table.bin", file_name);
+}
+
+#[derive(Debug, Clone)]
+pub enum RowValue {
+    Long { value: i64 },
+    Double { value: f64 },
+}
+
+pub type Row = Vec<RowValue>;

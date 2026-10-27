@@ -176,11 +176,13 @@ fn create_column_bins<T>(
             column: OpenOptions::new()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(bin_file_path(final_file, &column_metadata.name, i))
                 .expect("failed to create column bin file"),
             indexes: OpenOptions::new()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(idx_file_path(final_file, &column_metadata.name, i))
                 .expect("failed to create column idx file"),
         };
