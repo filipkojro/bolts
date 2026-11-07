@@ -1,6 +1,8 @@
+use rayon::prelude::*;
 use std::{
     fs::File,
     io::{Error, ErrorKind, Read, Result, Seek},
+    os::unix::fs::FileExt,
 };
 
 use crate::models::{
@@ -173,4 +175,188 @@ pub fn column_eq(file_name: String, column_name: String, value_eq: RowValue) -> 
     }
 
     Ok(rows)
+}
+
+struct CoalescedRange {
+    start_offset: u64,
+    length: usize,
+    target_idx: Vec<u64>,
+}
+
+const GAP_THRESHOLD_BYTES: u64 = 1_200_000;
+
+fn coalesce_idxs(idxs: &[u64], metadata: &GeneralMetaData) -> Vec<CoalescedRange> {
+    if idxs.is_empty() {
+        return vec![];
+    }
+
+    let row_bytes = metadata.column_meta_data.len() as u64 * 8;
+
+    let mut ranges: Vec<CoalescedRange> = Vec::new();
+    let mut current_start: u64 = idxs[0] * row_bytes;
+    let mut current_end: u64 = current_start + row_bytes;
+    let mut current_rows: Vec<u64> = vec![idxs[0]];
+
+    for &idx in &idxs[1..] {
+        let row_offset = idx * row_bytes;
+        let gap = row_offset - current_end;
+
+        if gap <= GAP_THRESHOLD_BYTES {
+            current_end = row_offset + row_bytes;
+            current_rows.push(idx);
+        } else {
+            ranges.push(CoalescedRange {
+                start_offset: current_start,
+                length: (current_end - current_start) as usize,
+                target_idx: current_rows,
+            });
+            current_start = row_offset;
+            current_end = row_offset + row_bytes;
+            current_rows = vec![idx];
+        }
+    }
+    ranges.push(CoalescedRange {
+        start_offset: current_start,
+        length: (current_end - current_start) as usize,
+        target_idx: current_rows,
+    });
+
+    ranges
+}
+
+fn par_read_coalesced(
+    file: &File,
+    ranges: &[CoalescedRange],
+    metadata: &GeneralMetaData,
+) -> Vec<Row> {
+    let row_bytes = metadata.column_meta_data.len() as u64 * 8;
+    ranges
+        .par_iter()
+        .flat_map_iter(|range| {
+            let mut chunk_buf = vec![0u8; range.length];
+            file.read_exact_at(&mut chunk_buf, range.start_offset)
+                .expect("disk read failed");
+            range.target_idx.iter().map(move |&row_idx| {
+                let row_offset_in_buf = ((row_idx * row_bytes) - range.start_offset) as usize;
+                let row_data =
+                    chunk_buf[row_offset_in_buf..row_offset_in_buf + row_bytes as usize].to_vec();
+                raw_row_to_row(&row_data, metadata)
+            })
+        })
+        .collect()
+}
+
+pub fn column_eq_p(file_name: String, column_name: String, value_eq: RowValue) -> Result<Vec<Row>> {
+    let rows: Vec<Row> = Vec::new();
+
+    let metadata = get_metadata(file_name.clone())?;
+    let column_metadata = get_column_metadata_by_name(metadata.clone(), column_name.clone())?;
+
+    let bin: usize; // there is only one possible bin for equal
+
+    match column_metadata.column_spec {
+        ColumnSpec::Long {
+            min_value,
+            max_value,
+            bin_splits,
+        } => match value_eq {
+            RowValue::Long { value } => {
+                if value < min_value || max_value < value {
+                    return Ok(rows);
+                }
+                bin = bin_splits
+                    .partition_point(|&x| x <= value)
+                    .saturating_sub(1);
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "type of value_eq is different than column",
+                ));
+            }
+        },
+        ColumnSpec::Double {
+            min_value,
+            max_value,
+            bin_splits,
+        } => match value_eq {
+            RowValue::Double { value } => {
+                if value < min_value || max_value < value {
+                    return Ok(rows);
+                }
+                bin = bin_splits
+                    .partition_point(|&x| x <= value)
+                    .saturating_sub(1);
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "type of value_eq is different than column",
+                ));
+            }
+        },
+    }
+    let total_bytes = metadata.number_of_rows * 8;
+    let mut bytes_processed = 0;
+
+    let mut val_file = File::open(bin_file_path(&file_name, &column_name, bin))?;
+
+    let mut idx_file = File::open(idx_file_path(&file_name, &column_name, bin))?;
+
+    let mut val_chunk = vec![0u8; CHUNK_SIZE];
+    let mut idx_chunk = vec![0u8; CHUNK_SIZE];
+
+    let mut found_idx: Vec<u64> = Vec::with_capacity(CHUNK_SIZE);
+
+    while bytes_processed < total_bytes {
+        let bytes_to_read =
+            std::cmp::min(CHUNK_SIZE as u64, total_bytes - bytes_processed) as usize;
+
+        val_file.read_exact(&mut val_chunk[..bytes_to_read])?;
+        idx_file.read_exact(&mut idx_chunk[..bytes_to_read])?;
+
+        for (val_bytes, idx_bytes) in val_chunk[..bytes_to_read]
+            .chunks_exact(8)
+            .zip(idx_chunk[..bytes_to_read].chunks_exact(8))
+        {
+            let idx: u64 = u64::from_le_bytes(idx_bytes.try_into().unwrap());
+
+            match value_eq {
+                RowValue::Long { value } => {
+                    let val: i64 = i64::from_le_bytes(val_bytes.try_into().unwrap());
+                    if val == value {
+                        found_idx.push(idx);
+                    }
+                }
+                RowValue::Double { value } => {
+                    let val: f64 = f64::from_le_bytes(val_bytes.try_into().unwrap());
+                    if val == value {
+                        found_idx.push(idx);
+                    }
+                }
+            }
+        }
+
+        bytes_processed += bytes_to_read as u64;
+    }
+
+    let table_file = File::open(table_file_path(&file_name))?;
+
+    let ranges = coalesce_idxs(&found_idx, &metadata);
+
+    Ok(par_read_coalesced(&table_file, &ranges, &metadata))
+
+    // rows = found_idx
+    //     .par_iter()
+    //     .map(|idx| {
+    //         let mut buf = vec![0u8; number_of_columns * 8];
+    //         let offset: u64 = idx * number_of_columns as u64 * 8;
+    //         table_file
+    //             .read_exact_at(&mut buf, offset)
+    //             .expect("read at offset failed");
+    //         raw_row_to_row(&buf, &metadata)
+    //     })
+    //     .collect();
+
+    // Ok(rows)
 }

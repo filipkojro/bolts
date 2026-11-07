@@ -10,3 +10,6 @@
 # large files
 *.dat
 *.bolts
+
+.DS_Store
+*.tar.gz
