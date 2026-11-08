@@ -1,4 +1,6 @@
 use rayon::prelude::*;
+use std::io::BufReader;
+use std::time::Instant;
 use std::{
     fs::File,
     io::{Error, ErrorKind, Read, Result, Seek},
@@ -13,14 +15,9 @@ use crate::models::{
 const CHUNK_SIZE: usize = 256 * 1024;
 
 pub fn get_metadata(final_file: String) -> Result<GeneralMetaData> {
-    let mut file = File::open(final_file + "/meta.json")?;
-
-    let mut metadata_json = String::new();
-
-    file.read_to_string(&mut metadata_json)?;
-
-    let general_metadata: GeneralMetaData = serde_json::from_str(&metadata_json)?;
-
+    let file = File::open(final_file + "/meta.json")?;
+    let reader = BufReader::new(file);
+    let general_metadata: GeneralMetaData = serde_json::from_reader(reader)?;
     Ok(general_metadata)
 }
 
@@ -50,7 +47,7 @@ pub fn read_table_bin_raw_row(
     Ok(())
 }
 
-pub fn raw_row_to_row(raw_row: &Vec<u8>, metadata: &GeneralMetaData) -> Row {
+pub fn raw_row_to_row(raw_row: &[u8], metadata: &GeneralMetaData) -> Row {
     let mut row: Row = Row::with_capacity(metadata.column_meta_data.len());
 
     for (column_metadata, value_bytes) in metadata
@@ -183,7 +180,7 @@ struct CoalescedRange {
     target_idx: Vec<u64>,
 }
 
-const GAP_THRESHOLD_BYTES: u64 = 1_200_000;
+const GAP_THRESHOLD_BYTES: u64 = 128 * 1024;
 
 fn coalesce_idxs(idxs: &[u64], metadata: &GeneralMetaData) -> Vec<CoalescedRange> {
     if idxs.is_empty() {
@@ -230,18 +227,24 @@ fn par_read_coalesced(
     metadata: &GeneralMetaData,
 ) -> Vec<Row> {
     let row_bytes = metadata.column_meta_data.len() as u64 * 8;
+
     ranges
         .par_iter()
-        .flat_map_iter(|range| {
+        .flat_map(|range| {
             let mut chunk_buf = vec![0u8; range.length];
             file.read_exact_at(&mut chunk_buf, range.start_offset)
                 .expect("disk read failed");
-            range.target_idx.iter().map(move |&row_idx| {
+
+            let mut local_rows = Vec::with_capacity(range.target_idx.len());
+
+            for &row_idx in &range.target_idx {
                 let row_offset_in_buf = ((row_idx * row_bytes) - range.start_offset) as usize;
                 let row_data =
-                    chunk_buf[row_offset_in_buf..row_offset_in_buf + row_bytes as usize].to_vec();
-                raw_row_to_row(&row_data, metadata)
-            })
+                    &chunk_buf[row_offset_in_buf..row_offset_in_buf + row_bytes as usize];
+                local_rows.push(raw_row_to_row(row_data, metadata));
+            }
+
+            local_rows
         })
         .collect()
 }
@@ -345,18 +348,4 @@ pub fn column_eq_p(file_name: String, column_name: String, value_eq: RowValue) -
     let ranges = coalesce_idxs(&found_idx, &metadata);
 
     Ok(par_read_coalesced(&table_file, &ranges, &metadata))
-
-    // rows = found_idx
-    //     .par_iter()
-    //     .map(|idx| {
-    //         let mut buf = vec![0u8; number_of_columns * 8];
-    //         let offset: u64 = idx * number_of_columns as u64 * 8;
-    //         table_file
-    //             .read_exact_at(&mut buf, offset)
-    //             .expect("read at offset failed");
-    //         raw_row_to_row(&buf, &metadata)
-    //     })
-    //     .collect();
-
-    // Ok(rows)
 }
