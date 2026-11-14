@@ -1,15 +1,19 @@
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Result, Write},
 };
 
 use crate::{
     models::{
-        BinFiles, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData, OriginalColumnMetaData,
-        bin_file_path, idx_file_path,
+        AllBinsBuffers, BinBuffers, ColumnMetaData, ColumnSpec, ColumnType, GeneralMetaData,
+        OriginalColumnMetaData, bin_file_path, idx_file_path,
     },
     reader::get_metadata,
 };
+
+const NUMBER_OF_BINS: usize = 100;
+const SIZE_OF_BIN_BUFFER: usize = 4000 * 8; // 4000 64bit values
 
 fn save_metadata(final_file: String, metadata: GeneralMetaData) -> Result<()> {
     let mut metadata_file = File::create(final_file + "/meta.json")?;
@@ -93,9 +97,13 @@ fn generate_metadata(original_file: String, final_file: String) -> Result<()> {
                         max_value,
                         ..
                     } => {
-                        let value: i64 = value_string
-                            .parse()
-                            .expect("failed to parse string into i64");
+                        let value: i64 = value_string.parse().expect(
+                            format!(
+                                "failed to parse string into i64\n{}\n{}",
+                                value_string, line_raw
+                            )
+                            .as_str(),
+                        );
 
                         if *max_value < value {
                             *max_value = value;
@@ -110,9 +118,13 @@ fn generate_metadata(original_file: String, final_file: String) -> Result<()> {
                         max_value,
                         ..
                     } => {
-                        let value: f64 = value_string
-                            .parse()
-                            .expect("failed to parse string into i64");
+                        let value: f64 = value_string.parse().expect(
+                            format!(
+                                "failed to parse string into f64\n{}\n{}",
+                                value_string, line_raw
+                            )
+                            .as_str(),
+                        );
 
                         if *max_value < value {
                             *max_value = value;
@@ -126,8 +138,6 @@ fn generate_metadata(original_file: String, final_file: String) -> Result<()> {
             }
         }
     }
-
-    const NUMBER_OF_BINS: usize = 1;
 
     for column_metadata in new_column_metadata.iter_mut() {
         match &mut column_metadata.column_spec {
@@ -175,8 +185,17 @@ fn create_column_bins<T>(
     final_file: &String,
     column_metadata: &ColumnMetaData,
     bins: &Vec<T>,
+    all_bins_buffers: &mut AllBinsBuffers,
 ) -> Result<()> {
-    fs::create_dir_all(format!("{}/{}", final_file.clone(), column_metadata.name))?;
+    fs::create_dir_all(format!(
+        "{}/{}",
+        final_file.clone(),
+        column_metadata.name.clone()
+    ))?;
+
+    let _ = all_bins_buffers.insert(column_metadata.name.clone(), HashMap::new());
+
+    let column_buffers = all_bins_buffers.get_mut(&column_metadata.name).unwrap();
 
     for i in 0..bins.len() {
         let _c = OpenOptions::new()
@@ -189,6 +208,14 @@ fn create_column_bins<T>(
             .write(true)
             .truncate(true)
             .open(idx_file_path(final_file, &column_metadata.name, i))?;
+
+        let _ = column_buffers.insert(
+            i,
+            BinBuffers {
+                column: Vec::with_capacity(SIZE_OF_BIN_BUFFER),
+                index: Vec::with_capacity(SIZE_OF_BIN_BUFFER),
+            },
+        );
     }
 
     return Ok(());
@@ -200,29 +227,43 @@ fn put_into_bin_i64(
     bin_splits: &Vec<i64>,
     final_file: &String,
     column_metadata: &ColumnMetaData,
+    all_bins_buffers: &mut AllBinsBuffers,
 ) -> Result<()> {
     let bin_index = bin_splits
         .partition_point(|&x| x <= value)
         .saturating_sub(1);
 
-    let mut bin_files: BinFiles = BinFiles {
-        column: OpenOptions::new().append(true).open(bin_file_path(
-            final_file,
-            &column_metadata.name,
-            bin_index,
-        ))?,
-        indexes: OpenOptions::new().append(true).open(idx_file_path(
-            final_file,
-            &column_metadata.name,
-            bin_index,
-        ))?,
-    };
+    let bins_buffers = all_bins_buffers
+        .get_mut(&column_metadata.name)
+        .unwrap()
+        .get_mut(&bin_index)
+        .unwrap();
 
     let value_bytes = value.to_le_bytes();
-    bin_files.column.write(&value_bytes)?;
-
     let index_bytes = index.to_le_bytes();
-    bin_files.indexes.write(&index_bytes)?;
+
+    bins_buffers.column.extend_from_slice(&value_bytes);
+    bins_buffers.index.extend_from_slice(&index_bytes);
+
+    if bins_buffers.column.len() == bins_buffers.column.capacity() {
+        let mut column_file = OpenOptions::new().append(true).open(bin_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?;
+
+        let mut index_file = OpenOptions::new().append(true).open(idx_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?;
+
+        column_file.write_all(&bins_buffers.column)?;
+        index_file.write_all(&bins_buffers.index)?;
+
+        bins_buffers.column.clear();
+        bins_buffers.index.clear();
+    }
 
     Ok(())
 }
@@ -232,30 +273,72 @@ fn put_into_bin_f64(
     bin_splits: &Vec<f64>,
     final_file: &String,
     column_metadata: &ColumnMetaData,
+    all_bins_buffers: &mut AllBinsBuffers,
 ) -> Result<()> {
     let bin_index = bin_splits
         .partition_point(|&x| x <= value)
         .saturating_sub(1);
 
-    let mut bin_files: BinFiles = BinFiles {
-        column: OpenOptions::new().append(true).open(bin_file_path(
-            final_file,
-            &column_metadata.name,
-            bin_index,
-        ))?,
-        indexes: OpenOptions::new().append(true).open(idx_file_path(
-            final_file,
-            &column_metadata.name,
-            bin_index,
-        ))?,
-    };
+    let bins_buffers = all_bins_buffers
+        .get_mut(&column_metadata.name)
+        .unwrap()
+        .get_mut(&bin_index)
+        .unwrap();
 
     let value_bytes = value.to_le_bytes();
-    bin_files.column.write(&value_bytes)?;
-
     let index_bytes = index.to_le_bytes();
-    bin_files.indexes.write(&index_bytes)?;
 
+    bins_buffers.column.extend_from_slice(&value_bytes);
+    bins_buffers.index.extend_from_slice(&index_bytes);
+
+    if bins_buffers.column.len() == bins_buffers.column.capacity() {
+        let mut column_file = OpenOptions::new().append(true).open(bin_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?;
+
+        let mut index_file = OpenOptions::new().append(true).open(idx_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?;
+
+        column_file.write_all(&bins_buffers.column)?;
+        index_file.write_all(&bins_buffers.index)?;
+
+        bins_buffers.column.clear();
+        bins_buffers.index.clear();
+    }
+
+    Ok(())
+}
+
+fn flush_all_bin_buffers(final_file: &String, all_bins_buffers: &mut AllBinsBuffers) -> Result<()> {
+    for column_name in all_bins_buffers.keys() {
+        let column_buffers = all_bins_buffers.get(column_name).unwrap();
+
+        for bin_index in column_buffers.keys() {
+            let bin_buffers = column_buffers.get(bin_index).unwrap();
+
+            if bin_buffers.column.len() > 0 {
+                let mut column_file = OpenOptions::new().append(true).open(bin_file_path(
+                    final_file,
+                    &column_name,
+                    *bin_index,
+                ))?;
+
+                let mut index_file = OpenOptions::new().append(true).open(idx_file_path(
+                    final_file,
+                    &column_name,
+                    *bin_index,
+                ))?;
+
+                column_file.write_all(&bin_buffers.column)?;
+                index_file.write_all(&bin_buffers.index)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -273,13 +356,25 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
         .truncate(true)
         .open(final_file.clone() + "/table.bin")?;
 
+    let mut all_bins_buffers: AllBinsBuffers = AllBinsBuffers::new();
+
     for column_metadata in metadata.column_meta_data.iter() {
         match &column_metadata.column_spec {
             ColumnSpec::Long { bin_splits, .. } => {
-                create_column_bins(&final_file, &column_metadata, &bin_splits)?;
+                create_column_bins(
+                    &final_file,
+                    &column_metadata,
+                    &bin_splits,
+                    &mut all_bins_buffers,
+                )?;
             }
             ColumnSpec::Double { bin_splits, .. } => {
-                create_column_bins(&final_file, &column_metadata, &bin_splits)?;
+                create_column_bins(
+                    &final_file,
+                    &column_metadata,
+                    &bin_splits,
+                    &mut all_bins_buffers,
+                )?;
             }
         }
     }
@@ -310,6 +405,7 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
                             bin_splits,
                             &final_file,
                             &metadata.column_meta_data[column_index],
+                            &mut all_bins_buffers,
                         )?;
                     }
                     ColumnSpec::Double { bin_splits, .. } => {
@@ -325,6 +421,7 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
                             bin_splits,
                             &final_file,
                             &metadata.column_meta_data[column_index],
+                            &mut all_bins_buffers,
                         )?;
                     }
                 }
@@ -344,6 +441,8 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
 
         table_buffer.clear();
     }
+    flush_all_bin_buffers(&final_file, &mut all_bins_buffers)?;
+
     Ok(())
 }
 

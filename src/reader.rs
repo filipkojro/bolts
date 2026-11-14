@@ -120,12 +120,12 @@ pub fn column_eq(file_name: String, column_name: String, value_eq: RowValue) -> 
         },
     }
 
-    let total_bytes = metadata.number_of_rows * 8;
-    let mut bytes_processed = 0;
-
     let mut val_file = File::open(bin_file_path(&file_name, &column_name, bin))?;
 
     let mut idx_file = File::open(idx_file_path(&file_name, &column_name, bin))?;
+
+    let total_bytes = val_file.metadata().unwrap().len();
+    let mut bytes_processed = 0;
 
     let mut table_file = File::open(table_file_path(&file_name))?;
 
@@ -298,12 +298,12 @@ pub fn column_eq_p(file_name: String, column_name: String, value_eq: RowValue) -
             }
         },
     }
-    let total_bytes = metadata.number_of_rows * 8;
-    let mut bytes_processed = 0;
 
     let mut val_file = File::open(bin_file_path(&file_name, &column_name, bin))?;
-
     let mut idx_file = File::open(idx_file_path(&file_name, &column_name, bin))?;
+
+    let total_bytes = val_file.metadata().unwrap().len();
+    let mut bytes_processed = 0;
 
     let mut val_chunk = vec![0u8; CHUNK_SIZE];
     let mut idx_chunk = vec![0u8; CHUNK_SIZE];

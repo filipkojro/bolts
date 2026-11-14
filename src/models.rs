@@ -1,5 +1,6 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ColumnType {
@@ -46,10 +47,12 @@ pub struct GeneralMetaData {
     pub column_meta_data: Vec<ColumnMetaData>,
 }
 
-pub struct BinFiles {
-    pub column: File,
-    pub indexes: File,
+pub struct BinBuffers {
+    pub column: Vec<u8>,
+    pub index: Vec<u8>,
 }
+
+pub type AllBinsBuffers = HashMap<String, HashMap<usize, BinBuffers>>;
 
 pub fn bin_file_path(file_name: &String, column_name: &String, bin_number: usize) -> String {
     return format!("{}/{}/{}.bin", file_name, column_name, bin_number);
