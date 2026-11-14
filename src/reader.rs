@@ -1,6 +1,5 @@
 use rayon::prelude::*;
 use std::io::BufReader;
-use std::time::Instant;
 use std::{
     fs::File,
     io::{Error, ErrorKind, Read, Result, Seek},

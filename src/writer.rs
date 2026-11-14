@@ -21,9 +21,7 @@ fn save_metadata(final_file: String, metadata: GeneralMetaData) -> Result<()> {
     Ok(())
 }
 
-pub fn parse_original_column_metadata(
-    original_file: String,
-) -> Result<Vec<OriginalColumnMetaData>> {
+fn parse_original_column_metadata(original_file: String) -> Result<Vec<OriginalColumnMetaData>> {
     let f = File::open(original_file)?;
     let reader = BufReader::new(f);
 
@@ -129,21 +127,35 @@ fn generate_metadata(original_file: String, final_file: String) -> Result<()> {
         }
     }
 
+    const NUMBER_OF_BINS: usize = 1;
+
     for column_metadata in new_column_metadata.iter_mut() {
         match &mut column_metadata.column_spec {
             ColumnSpec::Long {
                 min_value,
+                max_value,
                 bin_splits,
-                ..
             } => {
-                *bin_splits = vec![*min_value];
+                if (NUMBER_OF_BINS as i64) < *max_value - *min_value {
+                    let bin_size = (*max_value - *min_value) / NUMBER_OF_BINS as i64;
+                    for bin_num in 0..NUMBER_OF_BINS {
+                        bin_splits.push(bin_size * bin_num as i64 + *min_value);
+                    }
+                } else {
+                    for bin_num in 0..(*max_value - *min_value) {
+                        bin_splits.push(bin_num + *min_value);
+                    }
+                }
             }
             ColumnSpec::Double {
                 min_value,
+                max_value,
                 bin_splits,
-                ..
             } => {
-                *bin_splits = vec![*min_value];
+                let bin_size = (*max_value - *min_value) / NUMBER_OF_BINS as f64;
+                for bin_num in 0..NUMBER_OF_BINS {
+                    bin_splits.push(bin_size * bin_num as f64 + *min_value);
+                }
             }
         }
     }
@@ -163,46 +175,54 @@ fn create_column_bins<T>(
     final_file: &String,
     column_metadata: &ColumnMetaData,
     bins: &Vec<T>,
-) -> Result<Vec<BinFiles>> {
+) -> Result<()> {
     fs::create_dir_all(format!("{}/{}", final_file.clone(), column_metadata.name))?;
 
-    let mut column_bins: Vec<BinFiles> = Vec::new();
-
     for i in 0..bins.len() {
-        let bin_files: BinFiles = BinFiles {
-            column: OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(bin_file_path(final_file, &column_metadata.name, i))?,
-            indexes: OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(idx_file_path(final_file, &column_metadata.name, i))?,
-        };
-
-        column_bins.push(bin_files);
+        let _c = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(bin_file_path(final_file, &column_metadata.name, i))?;
+        let _i = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(idx_file_path(final_file, &column_metadata.name, i))?;
     }
 
-    return Ok(column_bins);
+    return Ok(());
 }
 
 fn put_into_bin_i64(
     index: u64,
     value: i64,
     bin_splits: &Vec<i64>,
-    bin_files: &mut Vec<BinFiles>,
+    final_file: &String,
+    column_metadata: &ColumnMetaData,
 ) -> Result<()> {
     let bin_index = bin_splits
         .partition_point(|&x| x <= value)
         .saturating_sub(1);
 
+    let mut bin_files: BinFiles = BinFiles {
+        column: OpenOptions::new().append(true).open(bin_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?,
+        indexes: OpenOptions::new().append(true).open(idx_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?,
+    };
+
     let value_bytes = value.to_le_bytes();
-    bin_files[bin_index].column.write(&value_bytes)?;
+    bin_files.column.write(&value_bytes)?;
 
     let index_bytes = index.to_le_bytes();
-    bin_files[bin_index].indexes.write(&index_bytes)?;
+    bin_files.indexes.write(&index_bytes)?;
 
     Ok(())
 }
@@ -210,17 +230,31 @@ fn put_into_bin_f64(
     index: u64,
     value: f64,
     bin_splits: &Vec<f64>,
-    bin_files: &mut Vec<BinFiles>,
+    final_file: &String,
+    column_metadata: &ColumnMetaData,
 ) -> Result<()> {
     let bin_index = bin_splits
         .partition_point(|&x| x <= value)
         .saturating_sub(1);
 
+    let mut bin_files: BinFiles = BinFiles {
+        column: OpenOptions::new().append(true).open(bin_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?,
+        indexes: OpenOptions::new().append(true).open(idx_file_path(
+            final_file,
+            &column_metadata.name,
+            bin_index,
+        ))?,
+    };
+
     let value_bytes = value.to_le_bytes();
-    bin_files[bin_index].column.write(&value_bytes)?;
+    bin_files.column.write(&value_bytes)?;
 
     let index_bytes = index.to_le_bytes();
-    bin_files[bin_index].indexes.write(&index_bytes)?;
+    bin_files.indexes.write(&index_bytes)?;
 
     Ok(())
 }
@@ -239,23 +273,13 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
         .truncate(true)
         .open(final_file.clone() + "/table.bin")?;
 
-    let mut binned_column_files: Vec<Vec<BinFiles>> = Vec::new();
-
     for column_metadata in metadata.column_meta_data.iter() {
         match &column_metadata.column_spec {
             ColumnSpec::Long { bin_splits, .. } => {
-                binned_column_files.push(create_column_bins(
-                    &final_file,
-                    &column_metadata,
-                    &bin_splits,
-                )?);
+                create_column_bins(&final_file, &column_metadata, &bin_splits)?;
             }
             ColumnSpec::Double { bin_splits, .. } => {
-                binned_column_files.push(create_column_bins(
-                    &final_file,
-                    &column_metadata,
-                    &bin_splits,
-                )?);
+                create_column_bins(&final_file, &column_metadata, &bin_splits)?;
             }
         }
     }
@@ -284,7 +308,8 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
                             row_index as u64,
                             value,
                             bin_splits,
-                            &mut binned_column_files[column_index],
+                            &final_file,
+                            &metadata.column_meta_data[column_index],
                         )?;
                     }
                     ColumnSpec::Double { bin_splits, .. } => {
@@ -298,7 +323,8 @@ fn convert_data(original_file: String, final_file: String) -> Result<()> {
                             row_index as u64,
                             value,
                             bin_splits,
-                            &mut binned_column_files[column_index],
+                            &final_file,
+                            &metadata.column_meta_data[column_index],
                         )?;
                     }
                 }

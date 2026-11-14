@@ -2,6 +2,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use bolts::reader::column_eq_p;
+use bolts::writer::convert_dat_file;
 use bolts::{models::RowValue, reader::column_eq};
 
 fn drop_os_caches() {
@@ -37,6 +38,10 @@ fn drop_os_caches() {
 }
 
 fn main() {
+    // let start = Instant::now();
+    // convert_dat_file("large-file.dat".to_string()).expect("aaaaa");
+    // println!("finished in : {:?}", start.elapsed());
+
     const ITERATIONS: u32 = 5;
 
     drop_os_caches();
